@@ -16,21 +16,66 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# Dynamo Disaggregation: Separating Prefill and Decode for Enhanced Performance
+# Dynamo Disaggregation: Optimizing LLM Performance Through Smart Task Distribution
 
-The prefill and decode phases of LLM requests have different computation characteristics and memory footprints. Disaggregating these phases into specialized llm engines allows for better hardware allocation, improved scalability, and overall enhanced performance. For example, using a larger TP for the memory-bound decoding phase while a smaller TP for the computation-bound prefill phase allows both phases to be computed efficiently. In addition, for requests with long context, separating their prefill phase into dedicated prefill engines allows the ongoing decoding requests to be efficiently processed without being blocked by these long prefills.
+## What is Disaggregated Serving?
 
-Disaggregated execution of a request has three main steps:
-1. Prefill engine computes prefill phase and generates KV cache
-2. Prefill engine transfers the KV cache to decode engine, and
-3. Decode engine computes decode phase.
+Disaggregated serving is Dynamo's innovative approach to LLM inference that splits processing into two specialized phases:
 
-However, not all requests’ prefill phases need to be computed in the remote prefill engine. If the prefill is short or the decode engine has a high prefix cache hit, often it is more efficient to prefill locally in the decode engine. The disaggregation design in Dynamo accounts for all these scenarios and features a flexible framework that delivers strong performance across various conditions.
+1. **Prefill Phase**: Initial processing of your prompt
+2. **Decode Phase**: Generating the actual response
 
+By separating these phases, Dynamo can optimize each for maximum performance, leading to:
+- Faster response times
+- Higher throughput
+- Better resource utilization
+- Support for longer contexts
+
+## Key Benefits
+
+### 1. Optimized Resource Usage
+- **Specialized Hardware Allocation**: Match each phase with the most suitable hardware
+- **Efficient Scaling**: Scale prefill and decode resources independently
+- **Better GPU Utilization**: Prevent long prompts from blocking other requests
+
+### 2. Performance Improvements
+- **Faster Response Times**: Up to 3x improvement in time-to-first-token
+- **Higher Throughput**: Process more requests concurrently
+- **Long Context Support**: Handle large prompts without impacting other requests
+
+### 3. Smart Adaptation
+- **Automatic Mode Selection**: Dynamically chooses between local or remote processing
+- **Workload Optimization**: Adapts to varying request patterns
+- **Resource Balancing**: Maintains optimal performance under different loads
+
+## How It Works
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#76B900', 'primaryTextColor': '#fff', 'primaryBorderColor': '#62A420', 'lineColor': '#76B900', 'secondaryColor': '#333333'}}}%%
+graph LR
+    A[User Request] --> B[Smart Router]
+    B --> C{Length Check}
+    C -->|Short Prompt| D[Local Processing]
+    C -->|Long Prompt| E[Remote Prefill]
+    E --> F[KV Cache Transfer]
+    F --> G[Decode Phase]
+    D --> G
+    G --> H[Response]
+    
+    style A fill:#333333,stroke:#76B900,color:#fff
+    style B fill:#76B900,stroke:#62A420,color:#fff
+    style C fill:#76B900,stroke:#62A420,color:#fff
+    style D fill:#333333,stroke:#76B900,color:#fff
+    style E fill:#333333,stroke:#76B900,color:#fff
+    style F fill:#76B900,stroke:#62A420,color:#fff
+    style G fill:#76B900,stroke:#62A420,color:#fff
+    style H fill:#333333,stroke:#76B900,color:#fff
+```
 
 ## Design
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#76B900', 'primaryTextColor': '#fff', 'primaryBorderColor': '#62A420', 'lineColor': '#76B900', 'secondaryColor': '#333333', 'tertiaryColor': '#555555'}}}%%
 sequenceDiagram
     participant D as Worker
     participant Q as PrefillQueue
@@ -53,29 +98,50 @@ sequenceDiagram
         D->>D: Schedule decoding
 ```
 
-There are four main components in Dynamo disaggregation:
-- Worker: execute prefill and decode requests
-- Prefill worker: execute prefill requests only
-- Disaggregated router: decide whether to prefill locally or remotely
-- Prefill queue: cache and load balance the remote prefill requests
+## Components
 
-When worker receives a request, it first decides if the prefill should be done locally or remotely using the disaggregated router and allocates the KV blocks. If prefilling remotely, it then pushes a remote prefill request to the prefill queue. After that, the prefill worker pulls from prefill queue, reads KV blocks with prefix cache hit from the worker, computes the prefill, and writes the computed KV blocks back to the worker. Finally, the worker completes the remaining decoding.
+Dynamo's disaggregation system consists of four main components:
+
+### 1. Worker
+- Executes both prefill and decode requests
+- Makes intelligent routing decisions
+- Manages KV block allocation
+
+### 2. Prefill Worker
+- Specializes in prefill computations
+- Optimized for computation-heavy tasks
+- Efficiently handles long context windows
+
+### 3. Smart Router
+- Makes intelligent prefill routing decisions
+- Considers request characteristics
+- Optimizes for system performance
+
+### 4. Prefill Queue
+- Manages remote prefill requests
+- Provides load balancing
+- Ensures efficient request handling
 
 ## Conditional Disaggregation
 
-Not all requests’ prefill phases need to be computed in the remote prefill engine. Disaggregated router decides whether the prefill phase of a request should be computed locally and globally at runtime based on the prefill length and prefill queue status. Specifically, a request is sent to remote prefill engine if the following two conditions are met:
-1. The absolute prefill length without prefix cache hit is greater than a preset threshold. On the one hand, if the prefill length of a request is short, it can be efficiently computed in the decode engine by piggybacking chunked prefill requests with ongoing decode requests. On the other hand, if the prefix cache hit is long, the prefill becomes memory bound and hence can be more efficiently computed in the decode engine.
-2. The number of remote prefill requests in the prefill queue is less than a preset threshold. When the prefill queue has a large number of prefill requests, it indicates that the prefill workers are lagging behind, and it is better to prefill locally until more prefill workers join.
+Dynamo intelligently decides whether to process prefill locally or remotely based on:
 
-Conditional disaggregation allows Dynamo to achieve high performance for dynamic workloads
+### Request Characteristics
+- Prefill length
+- Prefix cache hit rate
+- System load conditions
 
-## Prefill Queue
+### System State
+- Queue length
+- Worker availability
+- Resource utilization
 
-Prefill requests are computation bound (except for very short prefills) and should be executed in their dedicated iterations without any other requests to ensure fast TTFT. To balance the load across multiple prefill engines, Dynamo adopts a global prefill queue where workers push remote prefill requests and prefill workers pull and complete the requests one by one. The global prefill queue is implemented based on NATS stream to ensure high performance and availability.
+This dynamic decision-making ensures optimal performance across different workloads and conditions.
 
 ## Efficient KV Transfer
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#76B900', 'primaryTextColor': '#fff', 'primaryBorderColor': '#62A420', 'lineColor': '#76B900', 'secondaryColor': '#333333', 'tertiaryColor': '#555555'}}}%%
 sequenceDiagram
     participant D as Worker
     participant SD as WorkerScheduler
@@ -88,7 +154,7 @@ sequenceDiagram
 
     P-->>D: Remote NIXL read for prefix hit KV blocks (non-block)
     P->>P: Execute prefill
-    P-->>D: Remote NIXL write for comptued KV blocks (non-block)
+    P-->>D: Remote NIXL write for computed KV blocks (non-block)
 
     P->>SP: Notify finish
     SP->>SD: Notify finish
@@ -97,49 +163,55 @@ sequenceDiagram
     D->>D: Execute decode
 ```
 
-The key to high-performance disaggregation is efficient KV transfer. Dynamo leverage NIXL to transfer KV cache directly from the VRAM of prefill engine to the VRAM of decode engine. In addition, the KV transfer is non-blocking, allowing GPU forward pass to serve other requests in addition to the KV transfer.
+### Key Features
 
-After the KV blocks are allocated, the worker scheduler sends the remote prefill requests, which contain the memory descriptors for the allocated KV blocks, to the prefill worker scheduler via prefill queue. This allows the prefill worker to read and write from the remote KV blocks without explicit handling in the remote worker engine, thanks to the RDMA read and write NIXL operations. Once the remote prefill is done, worker scheduler simply adds the decode request to the worker in-flight. This allows workers to execute forward passes of ongoing decode/prefill requests while waiting for the remote prefill to finish.
+1. **Direct Memory Transfer**
+   - Uses NIXL for GPU-to-GPU transfer
+   - Minimizes data movement overhead
+   - Supports non-blocking operations
 
-To reduce the size of memory descriptors, Dynamo applies two optimizations:
-1. After each worker finishes its initialization and allocates all the KV cache pool, it stores the memory descriptor of all blocks (which is also referred to as the NIXL metadata) in ETCD, a distributed key-value store. Prefill workers load and cache the memory descriptors in one worker at the first time that it serves a remote prefill request issued by this worker. Thus, only the KV block ID instead of the full memory descriptor is needed when issuing the remote prefill request.
+2. **Memory Optimization**
+   - Efficient block allocation
+   - Continuous block merging
+   - Layout transformation support
 
-2. Dynamo promotes the memory allocator in the prefill engine to allocate continuous blocks and merge continuous blocks into larger blocks to reduce the total number of KV blocks.
+3. **Performance Enhancements**
+   - Non-blocking operations
+   - Parallel request processing
+   - Optimized memory descriptors
 
-For decode and prefill with different KV layouts (i.e., due to different TP), Dynamo applies a high-performance kernel that transposes the KV blocks into their matching layout in the KV receiver after the NIXL reads and before the NIXL writes.
+## Runtime-Reconfigurable Architecture
 
-## Runtime-Reconfigurable xPyD
+Dynamo's disaggregation system supports dynamic scaling with zero downtime:
 
-The prefill queue and NIXL-based KV transfer design in Dynamo naturally allows runtime-reconfigurable xPyD. Workers and prefill workers can be added and removed at runtime without any system-level synchronization or overheads. New and existing prefill workers both just simply pull remote prefill requests from NATS prefill queue. The NIXL metadata of the new or existing workers (for new prefill workers) are lazily loaded and cached when necessary. Specifically, adding and removing workers and prefill workers is as easy as:
+### Worker Management
+- **Add Worker**: Automatic NIXL metadata registration
+- **Remove Worker**: Graceful flush and cleanup
+- **Add Prefill Worker**: Zero-config integration
+- **Remove Prefill Worker**: Clean engine shutdown
 
-- Add worker: add NIXL metadata in ETCD.
-- Remove worker: flush engine and delete NIXL metadata in ETCD.
-- Add prefill worker: no explicit action needed.
-- Delete prefill worker: flush engine.
+### Auto-Discovery
+- Uses etcd for component registration
+- Enables automatic worker discovery
+- Supports seamless scaling
 
-### How this works under the hood
+### Graceful Shutdown
+- Completes in-flight requests
+- Proper resource cleanup
+- Zero request loss
 
-#### Auto-Discovery for new workers
-
-In Dynamo, we use `etcd` (a distributed key-value pair store) as a way to register and discover new components. When a new decode/aggregated worker starts, it adds its endpoint information to `etcd` allowing the router to discover it and route requests to it. For the KV-cache transfer process, newly added decode workers put memory descriptors of their KV cache (used in NIXL transfer) in `etcd`. Newly added prefill workers also register with `etcd` for discovery and simply start pulling prefill requests from the global prefill queue after they spin up. Prefill workers lazy-pull the descriptors when they start serving a remote prefill request for the first time.
-
-You can watch this happen live by running the following:
+## Example Usage
 
 ```bash
-# in terminal 1 - run the disaggregated serving example
+# Start disaggregated serving
 dynamo serve graphs.disagg:Frontend -f ./configs/disagg.yaml
-```
 
-```bash
-# in terminal 2 - watch the namespace in etcd
+# Monitor component registration
 watch -cd etcdctl get --prefix <namespace>
 ```
 
-You should see something like this show up as the disaggregated serving example starts up:
-
-```bash
-# worker information
-dynamo/components/PrefillWorker/mock:694d967da694ea1e
+### Component Registration Example
+```json
 {
   "component": "PrefillWorker",
   "endpoint": "mock",
@@ -149,46 +221,4 @@ dynamo/components/PrefillWorker/mock:694d967da694ea1e
     "nats_tcp": "dynamo_prefillworker_0d6df828.mock-694d967da694ea1e"
   }
 }
-dynamo/components/Processor/chat/completions:694d967da694ea16
-{
-  "component": "Processor",
-  "endpoint": "chat/completions",
-  "namespace": "dynamo",
-  "lease_id": 7587886413599009302,
-  "transport": {
-    "nats_tcp": "dynamo_processor_3816642d.chat/completions-694d967da694ea16"
-  }
-}
-dynamo/components/VllmWorker/generate:694d967da694ea1a
-{
-  "component": "VllmWorker",
-  "endpoint": "generate",
-  "namespace": "dynamo",
-  "lease_id": 7587886413599009306,
-  "transport": {
-    "nats_tcp": "dynamo_vllmworker_3f6fafd3.generate-694d967da694ea1a"
-  }
-}
-dynamo/components/VllmWorker/load_metrics:694d967da694ea1a
-{
-  "component": "VllmWorker",
-  "endpoint": "load_metrics",
-  "namespace": "dynamo",
-  "lease_id": 7587886413599009306,
-  "transport": {
-    "nats_tcp": "dynamo_vllmworker_3f6fafd3.load_metrics-694d967da694ea1a"
-  }
-}
-
-# nixl metadata
-dynamo/nixl_metadata/e318db87-be55-4c18-9829-8036e1e603e2
 ```
-
-#### Graceful worker shutdown
-
-Since worker information is stored in etcd, we can shutdown workers by simply revoking their etcd leases. After a lease is revoked:
-
-- Decode/aggregated worker endpoints are immediately removed from etcd so that they would not accept new requests. They finish any in-flight requests, shut down their engine, and exit gracefully
-- Prefill workers stop pulling from the prefill queue and exit gracefully after all pending remote kv cache writes finish
-
-You can also visualize this by revoking a workers etcd lease while it has ongoing requests. Refer to this example script that does this: [revoke_lease.py](https://github.com/ai-dynamo/dynamo/blob/main/lib/bindings/python/examples/hello_world/revoke_lease.py).

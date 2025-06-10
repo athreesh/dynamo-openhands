@@ -17,22 +17,35 @@ limitations under the License.
 
 # Planner
 
-The planner monitors the state of the system and adjusts workers to ensure that the system runs efficiently. Currently, the planner can scale the number of vllm workers up and down based on the kv cache load and prefill queue size:
-* Backend:
-  * local ✅
-  * kubernetes ✅
-* LLM framework:
-  * vllm ✅
-  * tensorrt-llm ❌
-  * SGLang ❌
-  * llama.cpp ❌
-* Serving type:
-  * Aggregated ✅
-  * Disaggregated ✅
-* Planner actions:
-  * Load-based scaling up/down prefill/decode workers ✅
-  * SLA-based scaling up/down prefill/decode workers ✅ (with some limitations)
-  * Adjusting engine knobs ❌
+The Dynamo Planner is an intelligent orchestration system that automatically optimizes your LLM deployment for maximum efficiency and performance. It continuously monitors your system's health and dynamically adjusts resources to meet your service level agreements (SLAs) while minimizing costs.
+
+## Key Benefits
+
+- **Automatic Resource Optimization**: Dynamically scales workers up or down based on real-time demand
+- **SLA Compliance**: Ensures your deployment meets target latency and throughput requirements
+- **Cost Efficiency**: Prevents over-provisioning by matching resources to actual workload
+- **Zero-Downtime Scaling**: Seamlessly adjusts capacity without service interruption
+
+## Supported Features
+
+### Deployment Environments
+- ✅ Local deployment
+- ✅ Kubernetes clusters
+
+### LLM Frameworks
+- ✅ vLLM
+- ❌ TensorRT-LLM (coming soon)
+- ❌ SGLang (coming soon)
+- ❌ llama.cpp (coming soon)
+
+### Serving Modes
+- ✅ Aggregated serving
+- ✅ Disaggregated serving
+
+### Scaling Capabilities
+- ✅ Load-based worker scaling
+- ✅ SLA-driven scaling (with some limitations)
+- ❌ Dynamic engine parameter tuning (planned)
 
 ## Load-based Scaling Up/Down Prefill/Decode Workers
 

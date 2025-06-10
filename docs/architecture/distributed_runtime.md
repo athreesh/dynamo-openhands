@@ -17,76 +17,253 @@ limitations under the License.
 
 # Dynamo Distributed Runtime
 
-## Overview
+## What is the Distributed Runtime?
 
-Dynamo `DistributedRuntime` is the core infrastructure in dynamo that enables distributed communication and coordination between different dynamo components. It is implemented in rust (`/lib/runtime`) and exposed to other programming languages via binding (i.e., python bindings can be found in `/lib/bindings/python`). `DistributedRuntime` follows a hierarchical structure:
+The Distributed Runtime is Dynamo's intelligent communication backbone that enables seamless coordination between components in your LLM deployment. Built for reliability and performance, it ensures your distributed system operates as a cohesive unit, whether running on a single machine or across multiple nodes.
 
-- `DistributedRuntime`: This is the highest level object that exposes the distributed runtime interface. It maintains connection to external services (e.g., etcd for service discovery and NATS for messaging) and manages lifecycle with cancellation tokens.
-- `Namespace`: A `Namespace` is a logical grouping of components that isolate between different model deployments.
-- `Component`: A `Component` is a discoverable object within a `Namespace` that represents a logical unit of workers.
-- `Endpoint`: An `Endpoint` is a network-accessible service that provides a specific service or function.
+## Key Benefits
 
-While theoretically each `DistributedRuntime` can have multiple `Namespace`s as long as their names are unique (similar logic also applies to `Component/Namespace` and `Endpoint/Component`), in practice, each dynamo components typically are deployed with its own process and thus has its own `DistributedRuntime` object. However, they share the same namespace to discover each other.
+- **Seamless Scaling**: Automatically discovers and integrates new components as your deployment grows
+- **High Reliability**: Built-in fault tolerance and automatic recovery mechanisms
+- **Language Agnostic**: Core functionality in Rust with bindings for Python and other languages
+- **Flexible Deployment**: Supports both local and distributed environments
+- **Performance Optimized**: Efficient communication with minimal overhead
 
-For example, the deployment configuration `examples/llm/configs/disagg.yaml` have four workers:
+## Architecture Overview
 
-- `Frontend`: Start an HTTP server and register a `chat/completions` endpoint. The HTTP server route the request to the `Processor`.
-- `Processor`: When a new request arrives, `Processor` applies the chat template and perform the tokenization. Then, it route the request to the `VllmWorker`.
-- `VllmWorker` and `PrefillWorker`: Perform the actual decode and prefill computation.
+The Distributed Runtime uses a hierarchical structure to organize and manage components:
 
-Since the four workers are deployed in different processes, each of them have their own `DistributedRuntime`. Within their own `DistributedRuntime`, they all have their own `Namespace`s named `dynamo`. Then, under their own `dynamo` namespace, they have their own `Component`s named `Frontend/Processor/VllmWorker/PrefillWorker`. Lastly, for the `Endpoint`, `Frontend` has no `Endpoints`, `Processor` and `VllmWorker` each has a `generate` endpoint, and `PrefillWorker` has a placeholder `mock` endpoint. Their `DistributedRuntime`s and `Namespace`s are set in the `@service` decorators in `examples/llm/components/<frontend/processor/worker/prefill_worker>.py`. Their `Component`s are set by their name in `/deploy/dynamo/sdk/src/dynamo/sdk/cli/serve_dynamo.py`. Their `Endpoint`s are set by the `@endpoint` decorators in `examples/llm/components/<frontend/processor/worker/prefill_worker>.py`.
-
-## Initialization
-
-In this section, we explain what happens under the hood when `DistributedRuntime/Namespace/Component/Endpoint` objects are created. There are two modes for `DistributedRuntime` initialization: dynamic and static. In static mode, components and endpoints are defined using known addresses and do not change during runtime. In dynamic modes, components and endpoints are discovered through the network and can change during runtime. We focus on the dynamic mode in the rest of this document. Static mode is basically dynamic mode without registration and discovery and hence does not rely on etcd.
-
-```{caution}
-The hierarchy and naming in etcd and NATS may change over time, and this document might not reflect the latest changes. Regardless of such changes, the main concepts would remain the same.
+```mermaid
+graph TD
+    A[Distributed Runtime] --> B1[Namespace A]
+    A --> B2[Namespace B]
+    B1 --> C1[Component 1]
+    B1 --> C2[Component 2]
+    C1 --> D1[Endpoint 1]
+    C1 --> D2[Endpoint 2]
+    C2 --> D3[Endpoint 3]
 ```
 
-- `DistributedRuntime`: When a `DistributedRuntime` object is created, it establishes connections to the following two services:
-    - etcd (dynamic mode only): for service discovery. In static mode, `DistributedRuntime` can operate without etcd.
-    - NATS (both static and dynamic mode): for messaging.
+### Components
 
-  where etcd and NATS are two global services (there could be multiple etcd and NATS services for high availability).
+1. **Distributed Runtime**
+   - The top-level coordinator
+   - Manages connections to service discovery (etcd) and messaging (NATS)
+   - Handles component lifecycle and fault tolerance
 
-  For etcd, it also creates a primary lease and spin up a background task to keep the lease alive. All objects registered under this `DistributedRuntime` use this lease_id to maintain their life cycle. There is also a cancellation token that is tied to the primary lease. When the cancellation token is triggered or the background task failed, the primary lease is revoked or expired and the kv pairs stored with this lease_id is removed.
-- `Namespace`: `Namespace`s are primarily a logical grouping mechanism and is not registered in etcd. It provides the root path for all components under this `Namespace`.
-- `Component`: When a `Component` object is created, similar to `Namespace`, it isn't be registered in etcd. When `create_service` is called, it creates a NATS service group using `{namespace_name}.{service_name}` and registers a service in the registry of the `Component`, where the registry is an internal data structure that tracks all services and endpoints within the `DistributedRuntime`.
-- `Endpoint`: When an Endpoint object is created and started, it performs two key registrations:
-  - NATS Registration: The endpoint is registered with the NATS service group created during service creation. The endpoint is assigned a unique subject following the naming: `{namespace_name}.{service_name}.{endpoint_name}-{lease_id_hex}`.
-  - etcd Registration: The endpoint information is stored in etcd at a path following the naming: `/services/{namespace}/{component}/{endpoint}-{lease_id}`. Note that the endpoints of different workers of the same type (i.e., two `PrefillWorker`s in one deployment) share the same `Namespace`, `Componenet`, and `Endpoint` name. They are distinguished by their different primary `lease_id` of their `DistributedRuntime`.
+2. **Namespaces**
+   - Logical groupings for different model deployments
+   - Provides isolation between different services
+   - Enables independent scaling and management
 
-## Calling Endpoints
+3. **Components**
+   - Represents functional units like workers or services
+   - Automatically discoverable within their namespace
+   - Can be scaled independently
 
-Dynamo uses `Client` object to call an endpoint. When a `Client` objected is created, it is given the name of the `Namespace`, `Component`, and `Endpoint`. It then sets up an etcd watcher to monitor the prefix `/services/{namespace}/{component}/{endpoint}`. The etcd watcher continuously updates the `Client` with the information, including `lease_id` and NATS subject of the available `Endpoint`s.
+4. **Endpoints**
+   - Network-accessible service points
+   - Provides specific functionality (e.g., model inference)
+   - Automatically load balanced
 
-The user can decide which load balancing strategy to use when calling the `Endpoint` from the `Client`, which is done in [push_routers.rs](../../lib/runtime/src/pipeline/network/egress/push_router.rs). Dynamo supports three load balancing strategies:
+## Real-World Example: LLM Serving
 
-- `random`: randomly select an endpoint to hit,
-- `round_robin`: select endpoints in round-robin order,
-- `direct`: direct the request to a specific endpoint by specifying the `lease_id` of the endpoint.
+Let's look at how the Distributed Runtime orchestrates a real LLM serving deployment. Consider a typical setup from `examples/llm/configs/disagg.yaml` that demonstrates the power of Dynamo's distributed architecture:
 
-After selecting which endpoint to hit, the `Client` sends the serialized request to the NATS subject of the selected `Endpoint`. The `Endpoint` receives the request and create a TCP response stream using the connection information from the request, which establishes a direct TCP connection to the `Client`. Then, as the worker generates the response, it serializes each response chunk and sends the serialized data over the TCP connection.
-
-## Examples
-
-We provide native rust and python (through binding) examples for basic usage of `DistributedRuntime`:
-
-- Rust: `/lib/runtime/examples/`
-- Python: `/lib/bindings/python/examples/`. We also provide a complete example of using `DistributedRuntime` for communication and Dynamo's LLM library for prompt templates and (de)tokenization to deploy a vllm-based service. Please refer to `lib/bindings/python/examples/hello_world/server_vllm.py` for details.
-
-```{note}
-Building a vLLM docker image for ARM machines currently involves building vLLM from source, which is known to have performance issues to require exgtensive system RAM; see [vLLM Issue 8878](https://github.com/vllm-project/vllm/issues/8878).
-
-You can tune the number of parallel build jobs for building VLLM from source
-on ARM based on your available cores and system RAM with `VLLM_MAX_JOBS`.
-
-For example, on an ARM machine with low system resources:
-`./container/build.sh --framework vllm --platform linux/arm64 --build-arg VLLM_MAX_JOBS=2`
-
-For example, on a GB200 which has very high CPU cores and memory resource:
-`./container/build.sh --framework vllm --platform linux/arm64 --build-arg VLLM_MAX_JOBS=64`
-
-When vLLM has pre-built ARM wheels published, this process can be improved.
+```mermaid
+graph LR
+    A[HTTP Client] --> B[Frontend]
+    B --> C[Processor]
+    C --> D[VllmWorker]
+    C --> E[PrefillWorker]
 ```
+
+### Component Roles
+
+1. **Frontend Service**
+   - Exposes HTTP endpoints for client requests
+   - Provides OpenAI-compatible API (`chat/completions`)
+   - Routes requests to the Processor
+
+2. **Request Processor**
+   - Handles chat template formatting
+   - Performs tokenization
+   - Intelligently routes requests to workers
+
+3. **Inference Workers**
+   - **VllmWorker**: Handles token generation (decode phase)
+   - **PrefillWorker**: Processes initial prompts (prefill phase)
+
+### How It Works
+
+Each component runs in its own process with its own Distributed Runtime instance, but they all:
+- Share a common namespace (`dynamo`)
+- Auto-discover each other through service registration
+- Communicate efficiently using optimized protocols
+
+### Implementation Details
+
+The components are defined using Dynamo's Python decorators:
+```python
+# Component definition
+@service(namespace="dynamo")
+class Frontend:
+    # Endpoint definition
+    @endpoint
+    async def chat_completions(self, request):
+        # Implementation
+        pass
+```
+
+## Deployment Modes
+
+Dynamo's Distributed Runtime supports two deployment modes to match your needs:
+
+### Dynamic Mode (Recommended)
+
+- **Automatic Discovery**: Components find each other automatically
+- **Flexible Scaling**: Add or remove components without configuration changes
+- **High Availability**: Built-in support for component failover
+- **Requirements**: Needs etcd for service discovery and NATS for messaging
+
+### Static Mode
+
+- **Simpler Setup**: No service discovery needed
+- **Fixed Architecture**: Components use pre-configured addresses
+- **Lighter Weight**: Operates without etcd dependency
+- **Best For**: Development or simple deployments
+
+## How Component Discovery Works
+
+The Distributed Runtime uses a sophisticated but automated process to manage components:
+
+### 1. Runtime Initialization
+- Connects to etcd for service discovery (dynamic mode)
+- Establishes NATS messaging channels
+- Sets up health monitoring and lease management
+
+### 2. Component Registration
+```mermaid
+graph TD
+    A[Component Start] --> B[Create Runtime]
+    B --> C[Join Namespace]
+    C --> D[Register Services]
+    D --> E[Start Endpoints]
+    E --> F[Ready for Requests]
+```
+
+### 3. Health Management
+- Automatic lease renewal with etcd
+- Background health monitoring
+- Graceful shutdown on failures
+
+### 4. Service Discovery
+Components are organized in a hierarchical structure:
+```
+/services
+  /namespace
+    /component
+      /endpoint-{id}
+```
+
+## Making Service Calls
+
+Dynamo provides a flexible and efficient way to communicate between components through its client interface.
+
+### Client Features
+
+- **Automatic Discovery**: Finds available endpoints without manual configuration
+- **Load Balancing**: Built-in strategies for optimal request distribution
+- **Real-time Updates**: Automatically adapts to endpoint changes
+- **Streaming Support**: Efficient handling of large responses
+
+### Load Balancing Options
+
+Choose from three strategies to match your needs:
+
+1. **Round Robin** (Default)
+   - Evenly distributes requests across endpoints
+   - Best for balanced workloads
+   - Example:
+     ```python
+     client = Client(strategy="round_robin")
+     ```
+
+2. **Random**
+   - Randomly selects endpoints
+   - Good for simple load distribution
+   - Example:
+     ```python
+     client = Client(strategy="random")
+     ```
+
+3. **Direct**
+   - Routes to specific endpoints
+   - Useful for sticky sessions or debugging
+   - Example:
+     ```python
+     client = Client(strategy="direct", endpoint_id="worker-1")
+     ```
+
+### How It Works
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant LB as Load Balancer
+    participant E as Endpoint
+    
+    C->>LB: Request
+    LB->>LB: Select endpoint
+    LB->>E: Forward request
+    E-->>C: Stream response
+```
+
+1. Client creates request
+2. Load balancer selects endpoint
+3. Request sent via NATS
+4. Response streamed via direct TCP
+
+## Getting Started
+
+Dynamo provides comprehensive examples to help you start building distributed applications:
+
+### Quick Start Examples
+
+1. **Python Hello World**
+   ```python
+   # Simple endpoint example
+   from dynamo.runtime import service, endpoint
+
+   @service(namespace="demo")
+   class HelloService:
+       @endpoint
+       async def greet(self, name: str) -> str:
+           return f"Hello, {name}!"
+   ```
+
+2. **Complete LLM Service**
+   - Full vLLM-based inference service
+   - Includes prompt handling and tokenization
+   - Location: `lib/bindings/python/examples/hello_world/server_vllm.py`
+
+### Example Locations
+
+- **Python Examples**: `/lib/bindings/python/examples/`
+- **Rust Examples**: `/lib/runtime/examples/`
+
+### Building for ARM
+
+When building vLLM for ARM architectures:
+
+```bash
+# For resource-constrained systems
+./container/build.sh --framework vllm --platform linux/arm64 \
+    --build-arg VLLM_MAX_JOBS=2
+
+# For high-performance systems (e.g., GB200)
+./container/build.sh --framework vllm --platform linux/arm64 \
+    --build-arg VLLM_MAX_JOBS=64
+```
+
+> **Note**: ARM builds currently require building vLLM from source. See [vLLM Issue 8878](https://github.com/vllm-project/vllm/issues/8878) for details.

@@ -14,22 +14,69 @@
     See the License for the specific language governing permissions and
     limitations under the License.
 
-KV Block Manager
-================
-The Dynamo KV Block Manager (KVBM) is a scalable runtime component designed to handle memory allocation, management, and remote sharing of Key-Value (KV) blocks for inference tasks across heterogeneous and distributed environments. It acts as a unified memory layer for frameworks like vLLM, SGLang, and TRT-LLM.
+KV Block Manager: Intelligent Memory Management for LLMs
+=====================================================
 
-It offers:
+What is the KV Block Manager?
+--------------------------
 
-* A **unified memory API** that spans GPU memory, pinned host memory, remote RDMA-accessible memory, local or distributed pool of SSDs and remote file/object/cloud storage systems.
-* Support for evolving **block lifecycles** (allocate → register → match) with event-based state transitions that storage can subscribe to.
-* Integration with **NIXL**, a dynamic memory exchange layer used for remote registration, sharing, and access of memory blocks over RDMA/NVLink.
+The KV Block Manager (KVBM) is Dynamo's intelligent memory management system that optimizes how LLMs store and access their key-value cache data. It's designed to:
 
-The Dynamo KV Block Manager serves as a reference implementation that emphasizes modularity and extensibility. Its pluggable design enables developers to customize components and optimize for specific performance, memory, and deployment needs.
+* Maximize performance across different hardware setups
+* Scale efficiently in distributed environments
+* Support multiple LLM frameworks seamlessly
+
+Key Benefits
+----------
+
+1. **Unified Memory Management**
+   * Single API for all memory types (GPU, CPU, SSD, remote)
+   * Seamless data movement between memory tiers
+   * Optimized for your specific hardware setup
+
+2. **Intelligent Caching**
+   * Smart block allocation and deallocation
+   * Efficient cache reuse across requests
+   * Automatic memory tier optimization
+
+3. **Framework Compatibility**
+   * Works with vLLM, SGLang, and TRT-LLM
+   * Consistent API across frameworks
+   * Easy integration with existing systems
+
+4. **Distributed Operation**
+   * Efficient remote memory access
+   * Automatic block sharing between nodes
+   * Built-in RDMA support via NIXL
+
+Technical Features
+---------------
+
+1. **Memory Hierarchy Support**
+   * GPU Memory (HBM)
+   * CPU Memory (RAM)
+   * Local Storage (NVMe)
+   * Remote Storage (Object/Cloud)
+
+2. **Block Management**
+   * Lifecycle tracking (allocate → register → match)
+   * Event-based state transitions
+   * Customizable storage subscriptions
+
+3. **NIXL Integration**
+   * High-speed memory exchange
+   * Remote block access
+   * Dynamic memory sharing
+
+Getting Started
+-------------
+
+The KVBM documentation is organized into the following sections:
 
 .. toctree::
    :hidden:
 
-   Motivation <kvbm_motivation.md>
-   KVBM Architecture <kvbm_architecture.md>
-   Understanding KVBM components <kvbm_components.md>
-   KVBM Further Reading <kvbm_reading>
+   Why KVBM? <kvbm_motivation.md>
+   Architecture Overview <kvbm_architecture.md>
+   Component Details <kvbm_components.md>
+   Further Reading <kvbm_reading>
